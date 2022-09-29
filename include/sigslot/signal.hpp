@@ -13,6 +13,70 @@
 #include <typeinfo>
 #endif
 
+#ifdef SIGSLOT_WIN_MAIN_THREAD
+
+#include <functional>
+
+#define WM_SIGSLOT_WIN_MAIN_THREAD (WM_USER + 0x0044) // 0x0444
+
+namespace sigslot
+{
+
+/**
+ * Signal & Slot - Support for GUI that running on main thread
+ */
+
+static HWND g_sigslot_win_main_thread_hwnd = nullptr;
+
+static void set_win_main_thread_hwnd(HWND hwnd)
+{
+  g_sigslot_win_main_thread_hwnd = hwnd;
+}
+
+struct function_context_holder_t
+{
+  std::function<void()> fn;
+  function_context_holder_t(std::function<void()>&& f) : fn(std::move(f)) {}
+  void call() { fn(); }
+};
+
+} // sigslot
+
+#define win_main_thread_exec(func, args)\
+{\
+  auto pfn = new function_context_holder_t(std::bind(func, args));\
+  PostMessage(g_sigslot_win_main_thread_hwnd, WM_SIGSLOT_WIN_MAIN_THREAD, WPARAM(pfn), LPARAM(0));\
+}
+
+/**
+ * For MFC Framework
+ */
+
+#define ON_WM_SIGSLOT_WIN_MAIN_THREAD() ON_MESSAGE(WM_SIGSLOT_WIN_MAIN_THREAD, OnSignalSlotWinMainThread)
+
+#define SIGSLOT_MFC_INIT(cls) sigslot::set_win_main_thread_hwnd(cls->GetSafeHwnd());
+
+#define SIGSLOT_MFC_DECL(cls) afx_msg LRESULT OnSignalSlotWinMainThread(WPARAM wParam, LPARAM lParam);
+
+#define SIGSLOT_MFC_IMPL(cls)\
+LRESULT cls::OnSignalSlotWinMainThread(WPARAM wParam, LPARAM lParam)\
+{\
+  if (auto pfn = (sigslot::function_context_holder_t*)wParam)\
+  {\
+    pfn->call();\
+    delete pfn;\
+  }\
+  return 0;\
+}
+
+ /**
+  * For Windows API
+  */
+
+// <Later>
+
+#endif // SIGSLOT_WIN_MAIN_THREAD
+
 namespace sigslot {
 
 namespace detail {
@@ -878,7 +942,11 @@ public:
 
 protected:
     void call_slot(Args ...args) override {
-        func(args...);
+      #ifdef SIGSLOT_WIN_MAIN_THREAD
+      win_main_thread_exec(func, args...);
+      #else
+      func(args...);
+      #endif // SIGSLOT_WIN_MAIN_THREAD
     }
 
     func_ptr get_callable() const noexcept override {
